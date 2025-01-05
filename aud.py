@@ -6,6 +6,11 @@ import signal
 import sys
 import threading
 import socket
+from flask import Flask, jsonify, render_template
+
+
+app = Flask(__name__)
+monitoring_results = {}
 
 
 def parse_arguments():
@@ -22,6 +27,8 @@ def parse_arguments():
     parser.add_argument('--interval', type=int, default=5, help='Interval between queries in seconds')
     parser.add_argument('--timeout', type=int, default=5, help='Timeout for the HTTP request in seconds')
     parser.add_argument('--log_file', type=str, default=None, help='Path to log file')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='Flask server host')
+    parser.add_argument('--port', type=int, default=5000, help='Flask server port')
     return parser.parse_args()
 
 
@@ -69,6 +76,7 @@ def read_hosts(hosts_file):
 
 import cloudscraper
 
+
 def query_domain(domain, timeout):
     """
     Query the specified domain once and measure response time, with Cloudflare bypass.
@@ -101,11 +109,13 @@ def query_domain(domain, timeout):
         end_time = time.time()
         response_time = end_time - start_time
         if domain.startswith('http://'):
-            domain = domain[7:]
+            domain_clean = domain[7:]
         elif domain.startswith('https://'):
-            domain = domain[8:]
-        
-        ip_address = socket.gethostbyname(domain)
+            domain_clean = domain[8:]
+        else:
+            domain_clean = domain
+
+        ip_address = socket.gethostbyname(domain_clean)
         server_header = response.headers.get('Server', '').lower()
         is_cloudflare = 'cloudflare' in server_header
         return response.status_code == 200, response_time, response.status_code, ip_address, is_cloudflare
@@ -134,9 +144,53 @@ def monitor_domain(domain, interval, timeout):
         cloudflare_status = 'Cloudflare detected' if is_cloudflare else 'Cloudflare not detected'
         if response_time is not None and ip_address is not None:
             logging.info(f"{domain} is {status} (Status code: {status_code}, Response time: {response_time:.2f}s, IP: {ip_address}, {cloudflare_status})")
+            monitoring_results[domain] = {
+                'status': status,
+                'status_code': status_code,
+                'response_time': response_time,
+                'ip_address': ip_address,
+                'cloudflare': is_cloudflare
+            }
         else:
             logging.info(f"{domain} is {status} (Status code: N/A, Response time: N/A, IP: N/A, {cloudflare_status})")
+            monitoring_results[domain] = {
+                'status': status,
+                'status_code': None,
+                'response_time': None,
+                'ip_address': None,
+                'cloudflare': is_cloudflare
+            }
         time.sleep(interval)
+
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    """
+    Get the current monitoring status of all domains.
+
+    Returns
+    -------
+    response : JSON
+        JSON representation of monitoring results.
+    """
+    return jsonify(monitoring_results)
+
+@app.route("/")
+def hello():
+    return render_template('index.html')
+
+def run_flask(host, port):
+    """
+    Run the Flask server.
+
+    Parameters
+    ----------
+    host : str
+        Host address.
+    port : int
+        Port number.
+    """
+    app.run(host=host, port=port, threaded=True)
 
 
 def main():
@@ -156,6 +210,10 @@ def main():
         thread = threading.Thread(target=monitor_domain, args=(host, args.interval, args.timeout))
         thread.start()
         threads.append(thread)
+
+    flask_thread = threading.Thread(target=run_flask, args=(args.host, args.port))
+    flask_thread.start()
+    threads.append(flask_thread)
 
     for thread in threads:
         thread.join()

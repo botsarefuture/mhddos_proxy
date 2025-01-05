@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>DDOS CENTRAL</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+        }
+
+        th {
+            background-color: #f2f2f2;
+            text-align: left;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>DDOS CENTRAL</h1>
+    <table id="statusTable">
+        <thead>
+            <tr>
+                <th>Domain</th>
+                <th>Status</th>
+                <th>Status Code</th>
+                <th>Response Time (s)</th>
+                <th>IP Address</th>
+                <th>Cloudflare</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Data will be populated here -->
+        </tbody>
+    </table>
+
+    <script>
+        /**
+         * Fetches monitoring data from the /status endpoint and updates the table.
+         */
+        async function fetch_monitoring_data() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+                update_table(data);
+            } catch (error) {
+                console.error('Error fetching monitoring data:', error);
+            }
+        }
+
+        /**
+         * Updates the HTML table with the fetched monitoring data.
+         * @param {Object} data - The monitoring data from the /status endpoint.
+         */
+        function update_table(data) {
+            const table_body = document.getElementById('statusTable').getElementsByTagName('tbody')[0];
+            table_body.innerHTML = ''; // Clear existing data
+
+            for (const [domain, details] of Object.entries(data)) {
+                const row = table_body.insertRow();
+
+                const domain_cell = row.insertCell();
+                domain_cell.textContent = domain;
+
+                const status_cell = row.insertCell();
+                status_cell.textContent = details.status;
+                if (details.status === 'reachable') {
+                    status_cell.style.backgroundColor = 'red';
+                } else if (details.status === 'unreachable') {
+                    status_cell.style.backgroundColor = 'green';
+                }
+
+                const status_code_cell = row.insertCell();
+                status_code_cell.textContent = details.status_code !== null ? details.status_code : 'N/A';
+
+                const response_time_cell = row.insertCell();
+                response_time_cell.textContent = details.response_time !== null ? details.response_time.toFixed(2) : 'N/A';
+
+                const ip_address_cell = row.insertCell();
+                ip_address_cell.textContent = details.ip_address !== null ? details.ip_address : 'N/A';
+
+                const cloudflare_cell = row.insertCell();
+                cloudflare_cell.textContent = details.cloudflare ? 'Yes' : 'No';
+            }
+        }
+
+        // Initial fetch
+        fetch_monitoring_data();
+
+        // Fetch data every 5 seconds
+        setInterval(fetch_monitoring_data, 5000);
+    </script>
+</body>
+
+</html>
