@@ -1,0 +1,4 @@
+{
+    "https://www.perussuomalaiset.fi": ["GET", "BOT", "SLOW"],
+    "https://ps-nuoriso.fi": ["CFB", "CFBUAM"]
+}
