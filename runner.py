@@ -19,6 +19,7 @@ targets = [
 
 with open("targets.json", "r") as f:
     targets = json.load(f)
+    print(targets)
     
 def update_proxies(period, proxy_timeout, threads, targets):
     # Avoid parsing proxies too often when restart happens
