@@ -16,8 +16,10 @@ num_copies=$(nproc)
 
 launch_session() {
     local session_name=$1
-    tmux new-session -d -s "$session_name" "python3 runner.py"
-    echo "Launched $session_name"
+    if ! tmux has-session -t "$session_name" 2>/dev/null; then
+        tmux new-session -d -s "$session_name" "python3 runner.py"
+        echo "Launched $session_name"
+    fi
 }
 
 monitor_sessions() {
