@@ -12,15 +12,14 @@ from MHDDoS.start import ProxyManager
 from PyRoxy import ProxyChecker
 from PyRoxy import ProxyType
 
+import json
+
 targets = [
 ]
 
-with open("targets.txt", "r") as f:
-    for line in f:
-        targets.append(line.strip())
-
-
-
+with open("targets.json", "r") as f:
+    targets = json.load(f)
+    
 def update_proxies(period, proxy_timeout, threads, targets):
     # Avoid parsing proxies too often when restart happens
     if os.path.exists('files/proxies/proxies.txt'):
