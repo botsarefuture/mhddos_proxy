@@ -14,3 +14,4 @@
 pkill -f "bash ./launch_and_keep_max.sh"
 pkill -f "python3 runner.py"
 pkill -f "bash ./start.sh"
+pkill -f "python3 runner.py"
