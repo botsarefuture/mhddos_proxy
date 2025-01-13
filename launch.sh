@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # """
-# Launch and monitor multiple instances of runner.py in tmux sessions.
+# Launch and monitor multiple instances of runner.py using nohup with file logging.
 #
 # Parameters
 # ----------
@@ -14,21 +14,22 @@
 
 num_copies=$(nproc)
 
-launch_session() {
-    local session_name=$1
-    if ! tmux has-session -t "$session_name" 2>/dev/null; then
-        tmux new-session -d -s "$session_name" "python3 runner.py"
-        echo "Launched $session_name"
+launch_process() {
+    local process_name=$1
+    local log_file="log-${process_name}.log"
+    if ! pgrep -f "python3 runner.py" | grep -q "$process_name"; then
+        nohup python3 runner.py > "$log_file" 2>&1 &
+        echo "Launched $process_name"
     fi
 }
 
-monitor_sessions() {
+monitor_processes() {
     while true; do
         for ((i=1; i<=num_copies; i++)); do
-            session="xxx-$i"
-            if ! tmux has-session -t "$session" 2>/dev/null; then
-                echo "Session $session not found. Restarting."
-                launch_session "$session"
+            process_name="xxx-$i"
+            if ! pgrep -f "$process_name" > /dev/null; then
+                echo "Process $process_name not found. Restarting."
+                launch_process "$process_name"
             fi
         done
         sleep 5
@@ -36,11 +37,11 @@ monitor_sessions() {
 }
 
 for ((i=1; i<=num_copies; i++)); do
-    launch_session "xxx-$i"
+    launch_process "xxx-$i"
     sleep 1
 done
 
 echo "Launched $num_copies instances of runner.py"
-echo "To kill all instances, run 'tmux kill-session -a -t xxx-*'"
+echo "To kill all instances, run 'pkill -f runner.py'"
 
-monitor_sessions &
+monitor_processes &
