@@ -15,7 +15,7 @@ script_path="./launch_and_keep_max.sh"
 
 while true; do
     if ! pgrep -f "bash $script_path" > /dev/null; then
-        bash "$script_path" &
+        nohup bash "$script_path" > /dev/null 2>&1 &
     fi
     sleep 5
 done

@@ -18,7 +18,7 @@ while true; do
     cpu_usage=$(grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage}')
     
     if [ "$current_processes" -lt "$num_cores" ] && (( $(echo "$cpu_usage < 90" | bc -l) )); then
-        python3 runner.py &
+        nohup python3 runner.py > /dev/null 2>&1 &
     fi
     sleep 1
 done
