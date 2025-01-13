@@ -1,27 +1,32 @@
 #!/bin/bash
 
-# This script removes all traces of the specified directory and its contents,
-# and removes any references to it from logs.
+# WARNING: This script does what it says, so if you're not sure, stop now. Seriously, stop.
+# It removes all traces of the specified directory like it never existed... kinda like your last Tinder date.
 
-# Define the directory to be removed
-TARGET_DIR="."
-LOG_FILES=("/var/log/syslog" "/var/log/auth.log")  # Add more log files if needed
+# Define the directory to be erased from existence
+TARGET_DIR="mhddos_proxy"
+LOG_FILES=("/var/log/syslog" "/var/log/auth.log")  # Also, if you want to go all out, add more logs. Go wild.
 
-# Check if the directory exists
+# Prepare to erase all evidence like a true spy movie villain
+cd ..
+
+# Check if the directory exists (spoiler: it better not by the end of this)
 if [ -d "$TARGET_DIR" ]; then
-    # Remove the directory and its contents
+    # Goodbye directory, you were never meant to be. *sniff*
     rm -rf "$TARGET_DIR"
-    echo "Directory $TARGET_DIR and its contents have been removed."
+    echo "BOOM! The directory $TARGET_DIR and everything inside it are now vaporized. No one will ever know."
 else
-    echo "Directory $TARGET_DIR does not exist."
+    echo "Oopsie daisy! The directory $TARGET_DIR doesn’t even exist. It's like it was never here... well, technically it wasn’t."
 fi
 
-# Remove references to the directory from log files
-for LOG_FILE in "${LOG_FILES[@]}"; then
+# Now we’re going to scrub the logs like your last embarrassing moment. Bye-bye evidence!
+for LOG_FILE in "${LOG_FILES[@]}"; do
     if [ -f "$LOG_FILE" ]; then
         sed -i "/$TARGET_DIR/d" "$LOG_FILE"
-        echo "References to $TARGET_DIR have been removed from $LOG_FILE."
+        echo "Done. We just erased $TARGET_DIR from $LOG_FILE like it was a bad ex. Poof!"
     else
-        echo "Log file $LOG_FILE does not exist."
+        echo "Whoops, no log file found at $LOG_FILE. Is this real life? Guess we just pretend it didn’t exist."
     fi
 done
+
+# Bonus points if you laugh maniacally after running this. 😈
