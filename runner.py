@@ -8,7 +8,6 @@ import sys
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from matplotlib.backend_tools import ToolQuitAll
 import psutil
 
 from MHDDoS.start import ProxyManager
