@@ -90,27 +90,11 @@ def update_proxies(period: int, proxy_timeout: float, targets: list):
 def get_total_spawned_threads(processes):
     """Return the total number of threads currently spawned (summed over all processes)."""
     return sum(thread_count for (_, thread_count) in processes)
-
 def predict_threads_for_cpu(cpu_limit, processes, targets):
     """
     Advanced prediction algorithm for how many new threads to spawn
     to reach the desired CPU usage limit, ensuring that at least 1,000 threads
     are running at any given time.
-
-    This function:
-      - Warms up each process's CPU counter,
-      - Measures the total CPU usage from all active processes reliably,
-      - Computes how many new threads are needed based on remaining CPU capacity,
-      - Ensures a minimum addition if total threads fall below 1,000,
-      - Guarantees at least one new thread per target if threads are added.
-
-    Parameters:
-        cpu_limit (float): The target overall CPU usage percentage (e.g., 20.0 for 20%).
-        processes (list): List of tuples (process, thread_count) for all active processes.
-        targets (list): List of targets (used to enforce a minimum of one thread per target).
-
-    Returns:
-        int: The number of new threads to spawn.
     """
     total_cpu_usage = 0.0
     total_threads_running = 0
@@ -125,39 +109,40 @@ def predict_threads_for_cpu(cpu_limit, processes, targets):
     # Wait a short time to gather an accurate delta (this ensures our stats aren't "fake")
     time.sleep(1)
 
-    # Now measure each process's CPU usage (non-blocking with interval=None)
-    for proc, thread_count in processes:
-        try:
-            proc_cpu = psutil.Process(proc.pid).cpu_percent(interval=None)
-        except psutil.NoSuchProcess:
-            continue
-        total_cpu_usage += proc_cpu
-        total_threads_running += thread_count
-
     # Get overall system CPU usage for context (this is averaged over all cores)
-    system_cpu = psutil.cpu_percent(interval=0.1)  # Average CPU usage over all cores
+    system_cpu = psutil.cpu_percent(interval=0.1)
     total_cores = psutil.cpu_count(logical=False)  # Get number of physical cores
     print(f"[DEBUG] Overall system CPU usage: {system_cpu:.2f}% across {total_cores} cores.")
 
-    # Calculate remaining CPU capacity
-    cpu_diff = cpu_limit - system_cpu
-    if cpu_diff <= 0:
-        print("[DEBUG] CPU usage is at or above the limit. No new threads can be spawned.")
-        return 0  # No more threads can be spawned if CPU usage is at or above the target limit.
+    # If no threads are running, we avoid the division by zero and set a fallback
+    if total_threads_running > 0:
+        avg_cpu_per_thread = total_cpu_usage / total_threads_running
+    else:
+        avg_cpu_per_thread = 1  # Fallback value to allow the prediction to proceed
+        print("[DEBUG] No running threads, using fallback average CPU per thread.")
 
-    print(f"[DEBUG] Remaining CPU capacity: {cpu_diff:.2f}%")
+    print(f"[DEBUG] Average CPU usage per thread: {avg_cpu_per_thread:.4f}%")
+
+    # Baseline prediction: if no threads are running, set baseline to 1000
+    if total_threads_running == 0 or avg_cpu_per_thread == 0:
+        predicted_new_threads = 1000
+        print(f"[DEBUG] No running threads or avg_cpu_per_thread is 0, using baseline: {predicted_new_threads}")
+    else:
+        # Calculate remaining CPU capacity (note: if using multi-core, adjust if needed)
+        cpu_diff = cpu_limit - total_cpu_usage
+        if cpu_diff <= 0:
+            predicted_new_threads = 0
+            print("[DEBUG] CPU usage is at or above target. No new threads needed.")
+        else:
+            predicted_new_threads = int(cpu_diff / avg_cpu_per_thread)
+            print(f"[DEBUG] CPU difference: {cpu_diff:.2f} -> Predicted threads based on CPU diff: {predicted_new_threads}")
 
     # Ensure that if we are adding threads, we add at least one per target.
-    min_threads_required = len(targets)  # At least one thread per target
-    total_threads_running = max(total_threads_running, min_threads_required)  # Ensure at least 1000 threads
+    if predicted_new_threads > 0 and predicted_new_threads < len(targets):
+        predicted_new_threads = len(targets)
+        print(f"[DEBUG] Adjusted predicted threads to at least one per target: {predicted_new_threads}")
 
-    # Predict new threads based on remaining CPU capacity.
-    # We assume a rough estimate that each thread uses a fraction of CPU capacity based on the system load.
-    # Here, we make a simplified assumption that each thread will consume about `cpu_diff / total_threads_running`.
-    predicted_new_threads = int(cpu_diff / (total_cpu_usage / total_threads_running)) if total_threads_running > 0 else 1
-    predicted_new_threads = max(predicted_new_threads, min_threads_required)
-
-    # Ensure at least 1,000 threads are running in total (if not already).
+    # Enforce a minimum of 1,000 threads running at any given time.
     required_min_threads = 1000 - total_threads_running
     if required_min_threads > predicted_new_threads:
         print(f"[DEBUG] Total threads running ({total_threads_running}) is below 1000; "
@@ -167,6 +152,7 @@ def predict_threads_for_cpu(cpu_limit, processes, targets):
     print(f"[DEBUG] Final predicted new threads to spawn: {predicted_new_threads} to reach {cpu_limit}% CPU usage "
           f"and a minimum of 1000 threads running.")
     return predicted_new_threads
+
 
 
 # ---------------------------------------
