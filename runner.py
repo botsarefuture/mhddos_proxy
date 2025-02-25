@@ -78,6 +78,7 @@ def update_proxies(period: int, proxy_timeout: float, total_threads: int, target
                 socks4_wr.write(proxy_str)
             elif proxy.type == ProxyType.SOCKS5:
                 socks5_wr.write(proxy_str)
+
 def run_ddos(targets: list, total_threads: int, period: int, rpc: int, udp_threads: int, http_methods: list, debug: bool, cpu_limit: float):
     threads_per_target = total_threads // len(targets)
     params_list = []
