@@ -49,7 +49,7 @@ def update_proxies(period: int, proxy_timeout: float, targets: list):
     with open('../proxies_config.json') as f:
         config = json.load(f)
 
-    proxies = list(ProxyManager.DownloadFromConfig(config, 0))
+    proxies = list(ProxyManager.download_from_config(config, 0))
     random.shuffle(proxies)
 
     checked_proxies = []
