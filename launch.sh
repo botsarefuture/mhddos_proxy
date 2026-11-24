@@ -1,47 +1,31 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -u
 
-# """
-# Launch and monitor multiple instances of runner.py using nohup with file logging.
-#
-# Parameters
-# ----------
-# None
-#
-# Returns
-# -------
-# None
-# """
+# Use the available CPU count on Linux, with a macOS fallback.
+if ! num_copies=$(nproc 2>/dev/null); then
+    num_copies=$(sysctl -n hw.logicalcpu) || exit 1
+fi
+[[ $num_copies =~ ^[1-9][0-9]*$ ]] || exit 1
 
-num_copies=$(nproc)
+pids=()
 
-launch_process() {
-    local process_name=$1
-    local log_file="log-${process_name}.log"
-    if ! pgrep -f "python3 runner.py" | grep -q "$process_name"; then
-        nohup python3 runner.py > "$log_file" 2>&1 &
-        echo "Launched $process_name"
-    fi
-}
-
-monitor_processes() {
-    while true; do
-        for ((i=1; i<=num_copies; i++)); do
-            process_name="xxx-$i"
-            if ! pgrep -f "$process_name" > /dev/null; then
-                echo "Process $process_name not found. Restarting."
-                launch_process "$process_name"
-            fi
-        done
-        sleep 5
-    done
-}
-
-for ((i=1; i<=num_copies; i++)); do
-    launch_process "xxx-$i"
-    sleep 1
+for ((i = 1; i <= num_copies; i++)); do
+    label="xxx-$i"
+    WORKER_LABEL="$label" nohup python3 runner.py \
+        </dev/null >>"log-$label.log" 2>&1 &
+    pids[i]=$!
+    printf 'Started %s (PID %s)\n' "$label" "${pids[i]}"
 done
 
-echo "Launched $num_copies instances of runner.py"
-echo "To kill all instances, run 'pkill -f runner.py'"
-
-monitor_processes &
+status=0
+for ((i = 1; i <= num_copies; i++)); do
+    if wait "${pids[i]}"; then
+        printf 'xxx-%d (PID %s) finished\n' "$i" "${pids[i]}"
+    else
+        rc=$?
+        printf 'xxx-%d (PID %s) exited with status %d\n' \
+            "$i" "${pids[i]}" "$rc" >&2
+        status=1
+    fi
+done
+exit "$status"
