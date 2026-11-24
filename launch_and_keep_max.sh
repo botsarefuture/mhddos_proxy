@@ -3,72 +3,100 @@ set -eu
 
 cd -- "$(dirname -- "$0")"
 
+MIN_TARGET=70
+MAX_CAP=90
+COOLDOWN_SEC=5
+
 num_cpus=$(nproc)
 [[ $num_cpus =~ ^[1-9][0-9]*$ ]] || { echo "Invalid CPU count: $num_cpus" >&2; exit 1; }
+MAX_WORKERS=$((num_cpus * 4))
 
-run_workers() {
-    declare -A pid_to_label=()
-    pids=()
+declare -a pids=()
+declare -a labels=()
+declare -A pid_to_label=()
+next_idx=1
+last_scale_ts=0
 
-    stop_children() {
-        local pid
-        for pid in "${pids[@]:-}"; do
-            if kill -0 "$pid" 2>/dev/null; then
-                kill "$pid" 2>/dev/null || true
-            fi
-        done
-    }
-    trap stop_children INT TERM
+start_one_worker() {
+    local label="xxx-${next_idx}"
+    local log_file="log-${label}.log"
+    next_idx=$((next_idx + 1))
 
-    for ((i = 1; i <= num_cpus; i++)); do
-        label="xxx-$i"
-        log_file="log-$label.log"
+    WORKER_LABEL="$label" \
+    WORKER_CPU_MIN="$MIN_TARGET" \
+    WORKER_CPU_MAX="$MAX_CAP" \
+    nohup python3 runner.py \
+        </dev/null >>"$log_file" 2>&1 &
+    local pid=$!
 
-        WORKER_LABEL="$label" nohup python3 runner.py \
-            </dev/null >>"$log_file" 2>&1 &
-        pid=$!
+    pids+=("$pid")
+    labels+=("$label")
+    pid_to_label["$pid"]="$label"
+    printf '[scale-up] Started %s (PID %s), logging to %s\n' "$label" "$pid" "$log_file"
+}
 
-        pids+=("$pid")
-        pid_to_label["$pid"]="$label"
-        printf 'Started %s (PID %s), logging to %s\n' "$label" "$pid" "$log_file"
-    done
+stop_one_worker() {
+    local count=${#pids[@]}
+    (( count > 1 )) || return 1
 
-    overall_status=0
-    for pid in "${pids[@]}"; do
-        label="${pid_to_label[$pid]}"
-        if wait "$pid"; then
-            printf '%s (PID %s) exited cleanly\n' "$label" "$pid"
+    local last_i=$((count - 1))
+    local pid="${pids[$last_i]}"
+    local label="${labels[$last_i]}"
+
+    unset 'pids[last_i]'
+    unset 'labels[last_i]'
+    pids=("${pids[@]}")
+    labels=("${labels[@]}")
+    unset "pid_to_label[$pid]"
+
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    fi
+    printf '[scale-down] Stopped %s (PID %s)\n' "$label" "$pid"
+    return 0
+}
+
+reap_exited_workers() {
+    local new_pids=()
+    local new_labels=()
+    local i pid label rc
+
+    for i in "${!pids[@]}"; do
+        pid="${pids[$i]}"
+        label="${labels[$i]}"
+        if kill -0 "$pid" 2>/dev/null; then
+            new_pids+=("$pid")
+            new_labels+=("$label")
         else
-            rc=$?
-            printf '%s (PID %s) exited with status %d\n' "$label" "$pid" "$rc" >&2
-            overall_status=1
+            if wait "$pid"; then
+                printf '%s (PID %s) exited cleanly\n' "$label" "$pid"
+            else
+                rc=$?
+                printf '%s (PID %s) exited with status %d\n' "$label" "$pid" "$rc" >&2
+            fi
+            unset "pid_to_label[$pid]"
         fi
     done
 
-    exit "$overall_status"
+    pids=("${new_pids[@]:-}")
+    labels=("${new_labels[@]:-}")
 }
 
-if [[ "${1:-}" == "--run-workers" ]]; then
-    run_workers
-fi
-
-quota=$((70 * num_cpus))
-unit="runner-workers.service"
-script_path="$PWD/$(basename -- "$0")"
-
-cleanup_unit() {
-    systemctl --user stop "$unit" 2>/dev/null || true
+cleanup_all() {
+    local pid label
+    for pid in "${pids[@]:-}"; do
+        label="${pid_to_label[$pid]:-worker}"
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            printf 'Stopped %s (PID %s)\n' "$label" "$pid"
+        fi
+    done
 }
-trap cleanup_unit EXIT
+trap cleanup_all EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-# Start the worker service non-blockingly under a 70% aggregate CPU quota.
-systemd-run --user --no-block --collect \
-    --unit="$unit" \
-    --working-directory="$PWD" \
-    --property="CPUQuota=${quota}%" \
-    -- /bin/bash "$script_path" --run-workers
 
 read_cpu() {
     local cpu user nice system idle iowait irq softirq steal rest
@@ -77,15 +105,45 @@ read_cpu() {
     idle_total=$((idle + iowait))
 }
 
+for ((i = 1; i <= num_cpus; i++)); do
+    start_one_worker
+done
+
 read_cpu
-while systemctl --user is-active --quiet "$unit"; do
+while true; do
+    sleep 1
+    reap_exited_workers
+
+    # If all workers have exited on their own, exit the script cleanly.
+    if (( ${#pids[@]} == 0 )); then
+        echo "All workers exited."
+        exit 0
+    fi
+
     prev_total=$total
     prev_idle=$idle_total
-    sleep 1
     read_cpu
 
     elapsed=$((total - prev_total))
     (( elapsed > 0 )) || continue
     busy=$((elapsed - (idle_total - prev_idle)))
-    printf 'Host CPU usage: %d%%\n' "$((100 * busy / elapsed))"
+    host_pct=$((100 * busy / elapsed))
+    now=$(date +%s)
+
+    if (( host_pct < MIN_TARGET )); then
+        if (( now - last_scale_ts >= COOLDOWN_SEC )) && (( ${#pids[@]} < MAX_WORKERS )); then
+            start_one_worker
+            last_scale_ts=$now
+        fi
+        printf 'Host CPU: %d%% [BELOW %d%%, active workers: %d]\n' "$host_pct" "$MIN_TARGET" "${#pids[@]}"
+    elif (( host_pct > MAX_CAP )); then
+        if (( now - last_scale_ts >= COOLDOWN_SEC )); then
+            if stop_one_worker; then
+                last_scale_ts=$now
+            fi
+        fi
+        printf 'Host CPU: %d%% [ABOVE %d%%, active workers: %d]\n' "$host_pct" "$MAX_CAP" "${#pids[@]}"
+    else
+        printf 'Host CPU: %d%% [IN %d-%d%%, active workers: %d]\n' "$host_pct" "$MIN_TARGET" "$MAX_CAP" "${#pids[@]}"
+    fi
 done
