@@ -6,9 +6,11 @@ cd -- "$(dirname -- "$0")"
 MIN_TARGET=70
 MAX_CAP=90
 COOLDOWN_SEC=5
+RESTART_BACKOFF_SEC=3
 
 num_cpus=$(nproc)
 [[ $num_cpus =~ ^[1-9][0-9]*$ ]] || { echo "Invalid CPU count: $num_cpus" >&2; exit 1; }
+MIN_WORKERS="$num_cpus"
 MAX_WORKERS=$((num_cpus * 4))
 
 declare -a pids=()
@@ -16,11 +18,15 @@ declare -a labels=()
 declare -A pid_to_label=()
 next_idx=1
 last_scale_ts=0
+last_exit_ts=0
 
 start_one_worker() {
-    local label="xxx-${next_idx}"
+    local label="${1:-}"
+    if [[ -z "$label" ]]; then
+        label="xxx-${next_idx}"
+        next_idx=$((next_idx + 1))
+    fi
     local log_file="log-${label}.log"
-    next_idx=$((next_idx + 1))
 
     WORKER_LABEL="$label" \
     WORKER_CPU_MIN="$MIN_TARGET" \
@@ -33,7 +39,7 @@ start_one_worker() {
         pids+=("$pid")
         labels+=("$label")
         pid_to_label["$pid"]="$label"
-        printf '[scale-up] Started %s (PID %s), logging to %s\n' "$label" "$pid" "$log_file"
+        printf '[start] Started %s (PID %s), logging to %s\n' "$label" "$pid" "$log_file"
     fi
 }
 
@@ -66,10 +72,11 @@ stop_one_worker() {
     return 1
 }
 
-reap_exited_workers() {
+reap_and_restart_workers() {
     local new_pids=()
     local new_labels=()
-    local i pid label rc
+    local exited_labels=()
+    local i pid label rc now
 
     for i in "${!pids[@]}"; do
         pid="${pids[$i]:-}"
@@ -87,6 +94,7 @@ reap_exited_workers() {
                 printf '%s (PID %s) exited with status %d\n' "$label" "$pid" "$rc" >&2
             fi
             unset "pid_to_label[$pid]" || true
+            exited_labels+=("$label")
         fi
     done
 
@@ -96,6 +104,23 @@ reap_exited_workers() {
     else
         pids=()
         labels=()
+    fi
+
+    if (( ${#exited_labels[@]} > 0 )); then
+        last_exit_ts=$(date +%s)
+        for label in "${exited_labels[@]}"; do
+            printf '[restart-queued] Will restart %s after %ss backoff\n' "$label" "$RESTART_BACKOFF_SEC"
+        done
+    fi
+
+    now=$(date +%s)
+    if (( ${#pids[@]} < MIN_WORKERS )) && (( now - last_exit_ts >= RESTART_BACKOFF_SEC )); then
+        local needed=$((MIN_WORKERS - ${#pids[@]}))
+        local k
+        for ((k = 0; k < needed; k++)); do
+            start_one_worker
+        done
+        last_exit_ts=$now
     fi
 }
 
@@ -129,12 +154,7 @@ done
 read_cpu
 while true; do
     sleep 1
-    reap_exited_workers
-
-    if (( ${#pids[@]} == 0 )); then
-        echo "All workers exited."
-        exit 0
-    fi
+    reap_and_restart_workers
 
     prev_total=$total
     prev_idle=$idle_total
