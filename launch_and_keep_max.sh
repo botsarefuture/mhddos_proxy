@@ -29,10 +29,12 @@ start_one_worker() {
         </dev/null >>"$log_file" 2>&1 &
     local pid=$!
 
-    pids+=("$pid")
-    labels+=("$label")
-    pid_to_label["$pid"]="$label"
-    printf '[scale-up] Started %s (PID %s), logging to %s\n' "$label" "$pid" "$log_file"
+    if [[ -n "$pid" ]]; then
+        pids+=("$pid")
+        labels+=("$label")
+        pid_to_label["$pid"]="$label"
+        printf '[scale-up] Started %s (PID %s), logging to %s\n' "$label" "$pid" "$log_file"
+    fi
 }
 
 stop_one_worker() {
@@ -40,21 +42,28 @@ stop_one_worker() {
     (( count > 1 )) || return 1
 
     local last_i=$((count - 1))
-    local pid="${pids[$last_i]}"
-    local label="${labels[$last_i]}"
+    local pid="${pids[$last_i]:-}"
+    local label="${labels[$last_i]:-worker}"
 
-    unset 'pids[last_i]'
-    unset 'labels[last_i]'
-    pids=("${pids[@]}")
-    labels=("${labels[@]}")
-    unset "pid_to_label[$pid]"
-
-    if kill -0 "$pid" 2>/dev/null; then
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+    unset 'pids[last_i]' 'labels[last_i]'
+    if (( ${#pids[@]} > 0 )); then
+        pids=("${pids[@]}")
+        labels=("${labels[@]}")
+    else
+        pids=()
+        labels=()
     fi
-    printf '[scale-down] Stopped %s (PID %s)\n' "$label" "$pid"
-    return 0
+
+    if [[ -n "$pid" ]]; then
+        unset "pid_to_label[$pid]" || true
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+        printf '[scale-down] Stopped %s (PID %s)\n' "$label" "$pid"
+        return 0
+    fi
+    return 1
 }
 
 reap_exited_workers() {
@@ -63,29 +72,37 @@ reap_exited_workers() {
     local i pid label rc
 
     for i in "${!pids[@]}"; do
-        pid="${pids[$i]}"
-        label="${labels[$i]}"
+        pid="${pids[$i]:-}"
+        label="${labels[$i]:-worker}"
+        [[ -n "$pid" ]] || continue
+
         if kill -0 "$pid" 2>/dev/null; then
             new_pids+=("$pid")
             new_labels+=("$label")
         else
-            if wait "$pid"; then
+            if wait "$pid" 2>/dev/null; then
                 printf '%s (PID %s) exited cleanly\n' "$label" "$pid"
             else
                 rc=$?
                 printf '%s (PID %s) exited with status %d\n' "$label" "$pid" "$rc" >&2
             fi
-            unset "pid_to_label[$pid]"
+            unset "pid_to_label[$pid]" || true
         fi
     done
 
-    pids=("${new_pids[@]:-}")
-    labels=("${new_labels[@]:-}")
+    if (( ${#new_pids[@]} > 0 )); then
+        pids=("${new_pids[@]}")
+        labels=("${new_labels[@]}")
+    else
+        pids=()
+        labels=()
+    fi
 }
 
 cleanup_all() {
     local pid label
     for pid in "${pids[@]:-}"; do
+        [[ -n "$pid" ]] || continue
         label="${pid_to_label[$pid]:-worker}"
         if kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null || true
@@ -114,7 +131,6 @@ while true; do
     sleep 1
     reap_exited_workers
 
-    # If all workers have exited on their own, exit the script cleanly.
     if (( ${#pids[@]} == 0 )); then
         echo "All workers exited."
         exit 0
