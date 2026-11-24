@@ -1,24 +1,21 @@
 #!/usr/bin/env bash
-#
-# Launches tasks to match the number of CPU cores and keeps them at maximum load.
-#
-# Returns
-# -------
-# None
-#
-# Raises
-# ------
-# No exceptions are raised
-#
+set -eu
 
-num_cores=$(nproc)
+read_cpu() {
+    local cpu user nice system idle iowait irq softirq steal rest
+    read -r cpu user nice system idle iowait irq softirq steal rest < /proc/stat
+    total=$((user + nice + system + idle + iowait + irq + softirq + steal))
+    idle_total=$((idle + iowait))
+}
 
-while true; do
-    current_processes=$(pgrep -cf "python3 runner.py")
-    cpu_usage=$(grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage}')
-    
-    if [ "$current_processes" -lt "$num_cores" ] && (( $(echo "$cpu_usage < 90" | bc -l) )); then
-        nohup python3 runner.py > /dev/null 2>&1 &
-    fi
-    sleep 1
+read_cpu
+while sleep 1; do
+    prev_total=$total
+    prev_idle=$idle_total
+    read_cpu
+
+    elapsed=$((total - prev_total))
+    (( elapsed > 0 )) || continue
+    busy=$((elapsed - (idle_total - prev_idle)))
+    printf 'Host CPU usage: %d%%\n' "$((100 * busy / elapsed))"
 done
