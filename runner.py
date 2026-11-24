@@ -107,7 +107,7 @@ def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_metho
 
         # Get overall system CPU usage (blocking for 1 sec)
         cpu_percent = psutil.cpu_percent(interval=1)
-        print(f"✨ Overall CPU usage: {cpu_percent}% 💖")
+        print(f"✨ Overall CPU usage: {cpu_percent}%% 💖")
 
         # Clean up dead processes and calculate total threads
         active_processes = []
@@ -125,7 +125,7 @@ def monitor_cpu_usage(processes, cpu_limit, period, rpc, udp_threads, http_metho
         processes[:] = active_processes
 
         if cpu_percent > cpu_limit:
-            print(f"💔 CPU usage exceeded {cpu_limit}%.")
+            print(f"💔 CPU usage exceeded {cpu_limit}%%.")
             if TO_KILL:
                 print("Killing some processes to maintain fabulousness!")
             if processes and TO_KILL:
@@ -269,9 +269,9 @@ def init_argparse() -> argparse.ArgumentParser:
     parser.add_argument('--http-methods', nargs='+', default=['GET', 'STRESS', 'BOT', 'SLOW'],
                         help='List of HTTP(s) attack methods to use. Default: GET, STRESS, BOT, SLOW 💅✨')
     parser.add_argument('--cpu-limit', type=float, default=20.0,
-                        help='Target CPU usage limit as a percentage (default is 20%) 💖✨')
+                        help='Target CPU usage limit as a percentage (default is 20%%) 💖✨')
     parser.add_argument('--max-cpu-limit', type=float, default=30.0,
-                        help='Max CPU usage limit before killing processes (default is 30%) 💖✨')
+                        help='Max CPU usage limit before killing processes (default is 30%%) 💖✨')
     return parser
 
 
