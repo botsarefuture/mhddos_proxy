@@ -12,8 +12,11 @@ Wrapper script for running [MHDDoS](https://github.com/MHProDev/MHDDoS)
 ### Python
 
 ```bash
-git clone https://github.com/botsarefuture/mhddos_proxy.git && cd mhddos_proxy && git clone https://github.com/MHProDev/MHDDoS.git && python3 -m pip install -r MHDDoS/requirements.txt --b && bash launch.sh
-```
+mkdir -p ~/mhddos_proxy && cd ~/mhddos_proxy && \
+([ -d .git ] || git clone https://github.com/botsarefuture/mhddos_proxy.git .) && \
+([ -d MHDDoS ] || git clone https://github.com/MHProDev/MHDDoS.git MHDDoS) && \
+python3 -m pip install --break-system-packages --ignore-installed -r MHDDoS/requirements.txt && \
+bash launch.sh
 ```
 
 ### Docker
